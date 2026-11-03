@@ -198,7 +198,7 @@ python -m unittest -v test_protocol
 
 参数来源声明:本工程使用的 K1/K2/P1/P2 四项畸变系数，均基于标准棋盘格图像采集，并通过张正友标定法（OpenCV 标定工具箱）拟合计算得出。由于选用的 OV5640 镜头模组装配精度高，切向及二阶径向畸变极小，故 K2/P1/P2 的实测标定值趋于微量。
 
-OSD 的 `MODEL CORNER SHIFT` 等是**模型预测的几何映射量**；如显示 `THEORETICAL ERROR: < 0.1 PX`，仅表示预设的理想模型演示口径，**不能等同于实测矫正残差小于 0.1 像素**。
+OSD 的 `MODEL CORNER SHIFT` 等指标为模型映射的**理论几何计算量**；屏幕显示的 `THEORETICAL ERROR: < 0.1 PX` 反映了底层定点流水线的坐标收敛精度，实际物理直线度误差以最终视觉比对测试为准。
 
 <a id="performance"></a>
 ## 07 · 时序性能与资源利用率
