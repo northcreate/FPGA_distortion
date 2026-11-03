@@ -1,123 +1,166 @@
+<div align="center">
+
 # 基于 PGL50H FPGA 的实时图像畸变矫正与动态仿射变换系统
 
-> 全国大学生嵌入式芯片与系统设计竞赛 · 紫光同创 FPGA 赛道相关作品  
-> **PGL50H · OV5640 · DDR3 · RGB565 · HDMI 1080P@60Hz · Python 上位机**
+**全国大学生嵌入式芯片与系统设计竞赛 · 紫光同创 FPGA 赛道 · 选题二**
 
-![FPGA](https://img.shields.io/badge/FPGA-PGL50H-blue)
-![Tool](https://img.shields.io/badge/IDE-PDS%202025.2-green)
-![Language](https://img.shields.io/badge/Language-Verilog%20%7C%20Python-orange)
+**OV5640 · DDR3 · RGB565 · HDMI 1080P@60Hz · Python 图形化上位机**
 
-本项目面向机器视觉中镜头畸变、姿态变化及复杂光照等问题，基于**紫光同创 PGL50H FPGA**构建完整的硬件视频处理通路：OV5640 图像采集、DDR3 三帧缓存、定点几何映射、双线性插值、动态仿射变换、图像增强与 HDMI 输出。PC 仅负责通过 UART 下发控制命令及参数，**不参与任何图像像素的实时运算**。
+![FPGA](https://img.shields.io/badge/FPGA-PGL50H-2962FF)
+![IDE](https://img.shields.io/badge/IDE-PDS%202025.2-16A085)
+![HDMI](https://img.shields.io/badge/HDMI-1080P%4060Hz-0077B6)
+![Language](https://img.shields.io/badge/RTL-Verilog-E67E22)
+![PC](https://img.shields.io/badge/PC-Python%20%7C%20UART-6F42C1)
 
-主处理通路针对 **1920×1080** 图像设计，HDMI 采用 **1920×1080@60Hz** 显示时序；**60Hz 是输出刷新率，不代表摄像头以 60fps 采集不同画面**。
+**[系统架构](#architecture) · [核心功能](#features) · [工程目录](#structure) · [快速开始](#quick-start) · [性能验证](#performance) · [限制与声明](#limitations)**
 
-## 1. 系统架构
+</div>
+
+---
+
+## 项目概述
+
+本项目面向机器视觉中**镜头畸变、相机姿态变化与复杂光照**带来的图像处理问题，基于紫光同创 **PGL50H FPGA** 搭建从 **OV5640 摄像头采集 → DDR3 帧缓存 → 定点几何映射及双线性插值 → HDMI 显示**的完整硬件视频通路，并集成动态仿射变换、自适应 Gamma、透明 OSD 和可切换参考网格。
+
+- **高清主通路**：按 **1920 × 1080** 图像尺寸设计，HDMI 采用 **1080P@60Hz** 输出时序。
+- **全硬件像素处理**：PC 仅通过 UART 下发控制指令与系数，**不参与实时像素运算**。
+- **动态可配置**：支持四项畸变系数在线加载、0°～359°整数角度旋转演示与二维平移。
+- **资源约束下的架构设计**：高清畸变矫正与缩略帧旋转采用独立处理路径，兼顾实时性和片上存储资源。
+
+> **帧率说明：** 1080P@60Hz 表示 **HDMI 显示输出刷新率**；不表示已经证明 OV5640 每秒采集 60 帧不同画面。
+
+<a id="architecture"></a>
+## 01 · 系统架构
 
 ```mermaid
-flowchart TD
-    A[OV5640 1920×1080] --> B[RGB565 采集 / Gamma 增强]
-    B --> C[DDR3 三帧缓存]
-    C --> D[32 行循环缓存]
-    D --> E[定点径向/切向畸变映射]
-    E --> F[RGB565 双线性插值]
-    C --> G[独立缩略帧缓存]
-    G --> H[旋转 / 二维平移]
-    H --> I[缩略图双线性插值]
-    F --> J[显示模式选择]
-    I --> J
-    J --> K[透明 OSD / 硬件参考线]
-    K --> L[HDMI 1080P@60Hz]
-    M[Python PC 上位机] -->|UART 115200 8N1| N[参数校验及状态控制]
-    N -.-> E
-    N -.-> H
-    N -.-> K
+flowchart LR
+    CAM["OV5640 摄像头<br/>1920 × 1080"] --> ACQ["RGB565 采集<br/>图像增强"]
+    ACQ --> DDR["DDR3 三帧缓存"]
+
+    subgraph MAIN["高清畸变矫正主路径"]
+      LINE["32 行循环缓存"] --> MAP["径向 / 切向<br/>定点坐标映射"] --> BILI["RGB565<br/>双线性插值"]
+    end
+    subgraph THUMB["独立缩略帧仿射路径"]
+      STORE["缩略帧缓存"] --> ROT["0°–359°旋转<br/>二维平移"] --> RESAMPLE["四邻点采样<br/>双线性插值"]
+    end
+
+    DDR --> LINE
+    DDR --> STORE
+    BILI --> SELECT["显示模式选择"]
+    RESAMPLE --> SELECT
+    SELECT --> OSD["透明 OSD<br/>参考线 / 网格"] --> HDMI["HDMI<br/>1080P@60Hz"]
+
+    PC["Python 上位机"] -->|"UART · 115200 · 8N1"| CTRL["参数校验<br/>帧边界更新"]
+    CTRL -.-> MAP
+    CTRL -.-> ROT
+    CTRL -.-> OSD
+
+    classDef source fill:#eaf3ff,stroke:#4176b8,color:#1b385c
+    classDef process fill:#eef9f4,stroke:#4b9876,color:#244938
+    classDef control fill:#fff4e6,stroke:#bb8746,color:#66430f
+    class CAM,DDR,HDMI source
+    class LINE,MAP,BILI,STORE,ROT,RESAMPLE,SELECT,OSD process
+    class PC,CTRL control
 ```
 
-*示意图仅表示主要数据通路与控制关系。具体 Gamma 位置、缓存调度、寄存级数和跨时钟域细节以实际 RTL 为准。*
+*上图为逻辑架构示意。Gamma 的具体接入位置、DDR3 读写调度、跨时钟域处理和寄存器级数以最终 RTL 为准。*
 
-## 2. 功能概览与设计亮点
+<a id="features"></a>
+## 02 · 核心功能与技术亮点
 
-| 模块 | 已实现功能 | 技术特点 |
-| --- | --- | --- |
-| **实时几何矫正** | 径向 `K1/K2`、切向 `P1/P2` 畸变模型 | 32 行循环缓存、定点坐标流水线、双线性插值 |
-| **四参数动态加载** | Q16.16 参数通过 UART 在线下发 | 校验、参数范围及组合预算检查、帧边界提交、**硬件越界防爆保护** |
-| **仿射变换** | **0°～359° 整数角度**旋转与二维平移 | 独立缩略帧支路，绕开大角度旋转的跨行缓存限制 |
-| **图像增强** | 自适应 Gamma | 可通过串口切换，支持明暗场景演示 |
-| **状态与辅助显示** | 透明 OSD、十字线、边框、100 像素参考网格 | FPGA 纯 LUT 内部生成，便于状态查看及视觉对比 |
-| **PC 控制** | Python 图形化上位机 | COM 扫描、12 字节配置包、24 字节系数包、一键操作 |
+| 模块 | 实现内容 | 关键设计 |
+| :--- | :--- | :--- |
+| **实时畸变矫正** | 径向 `K1/K2` 与切向 `P1/P2` 模型 | 32 行缓存、Q16.16 定点流水线、双线性插值 |
+| **四参数在线加载** | UART 动态设置畸变系数 | 包校验、范围与组合预算检查、帧边界提交、坐标越界保护 |
+| **动态仿射变换** | 0°～359°整数角度旋转、二维平移 | 独立缩略帧缓存，解决大角度旋转跨行访问受限问题 |
+| **图像增强** | 自适应 Gamma | 可切换亮度增强处理，支持不同光照条件下对比 |
+| **状态可视化** | 透明 OSD、中心十字、边框、100 像素网格 | 用于模型状态观察和几何变化辅助对照 |
+| **PC 图形化控制** | 串口扫描、快捷指令、系数输入、报文预览 | 自动生成 12/24 字节配置包与 XOR 校验 |
 
-主显示处理流水线延迟为 **32 个像素时钟周期**，不包括摄像头采集与 DDR3 帧缓存造成的端到端延迟。任意角度旋转功能由**缩略帧支路**实现，不代表 1920×1080 全分辨率无损旋转。
+### 设计要点
 
-## 3. 硬件与开发环境
+**32 行缓存与双路径处理。** 正常高清畸变矫正以 32 行循环缓存提供邻域像素；针对大角度旋转时源像素跨越大量行的问题，设计独立 **160 × 90 缩略帧**旋转路径，实现可控资源开销下的多角度动态几何变换。正常高清主通路与缩略旋转路径的输出分辨率应当区分。
+
+**确定性流水线。** 主显示图像处理流水线延迟为 **32 个像素时钟周期**。该指标**不包含摄像头采集、DDR3 帧缓存等端到端延迟**。
+
+<a id="environment"></a>
+## 03 · 硬件平台与开发环境
 
 | 项目 | 配置 |
-| --- | --- |
-| FPGA | 紫光同创 PGL50H（工程目标器件以 `.pds` 为准） |
-| 开发工具 | **Pango Design Suite 2025.2** |
-| 输入 | OV5640，1920×1080，RGB565 |
-| 缓存 | DDR3 三帧缓存 + 32 行循环缓存；缩略旋转使用独立帧存储 |
-| 输出 | HDMI 1920×1080@60Hz，像素时钟 148.5MHz |
-| 串口 | CP2102 USB-UART，115200，8N1 |
-| PC 端 | Windows、Python 3.9+、Tkinter、PySerial |
-| 第三方 IP | **官方 DDR3 IP** 等依赖，已适配更新后的 PDS 2025.2 工程 |
+| :--- | :--- |
+| FPGA | 紫光同创 **PGL50H**（具体封装、速度等级以 `.pds` 工程为准） |
+| FPGA 工具链 | **Pango Design Suite 2025.2** |
+| 图像输入 | OV5640 · DVP · RGB565 · 1920 × 1080 |
+| 外部帧缓存 | DDR3 三帧缓存 |
+| 片上缓存 | 32 行循环缓存；另设缩略帧旋转缓存 |
+| 显示输出 | HDMI 1920 × 1080@60Hz；像素时钟 **148.5 MHz** |
+| 控制接口 | CP2102 USB-UART，**115200 / 8N1** |
+| 上位机 | Windows · Python 3.9+ · Tkinter · PySerial |
+| 第三方依赖 | 已更新为适配 PDS 2025.2 的**官方 DDR3 IP** 等 |
 
-**第三方 IP 与分发说明：** 重建工程前需安装适配 PGL50H 和 PDS 2025.2 的官方 DDR3 IP。厂商加密文件、IP 生成文件以及其他依赖的使用与再分发受各自授权条件约束。详细说明见 [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md)。
+> 厂商 IP / 加密文件的再分发需遵守相应许可；相关说明见 [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md)。
 
-## 4. 仓库目录
+<a id="structure"></a>
+## 04 · 仓库目录与核心模块
 
 ```text
 FPGA_distortion/
 ├── Fpga_Project/
-│   ├── source/                          # RTL、可分发的工程依赖及相关 IP 配置
-│   ├── HDMI_DDR3_OV5640_test.pds         # PDS 2025.2 工程文件
-│   ├── hdmi_ddr_ov5640_top.fdc          # 引脚/时序约束
-│   └── impl.tcl                         # 工程实现脚本（如使用）
+│   ├── source/                         # RTL、允许分发的必要依赖与 IP 配置
+│   ├── HDMI_DDR3_OV5640_test.pds        # PDS 工程
+│   ├── hdmi_ddr_ov5640_top.fdc         # 引脚与时序约束
+│   └── impl.tcl                        # 工程脚本
 ├── OV5640_PC_Controller/
-│   ├── app.py                           # 图形界面
-│   ├── protocol.py                      # 协议编码、校验与参数检查
-│   ├── test_protocol.py                 # 协议测试
+│   ├── app.py                          # Tkinter 图形界面
+│   ├── protocol.py                     # 报文编码、校验及参数检查
+│   ├── test_protocol.py                # 协议单元测试
 │   ├── requirements.txt
 │   ├── run_windows.bat
 │   └── README.md
 ├── docs/
-│   ├── gui_preview.png
-│   ├── resource_utilization.png
-│   ├── hdmi_ddr_ov5640_top.rtr          # 最终时序报告
+│   ├── gui_preview.png                 # 上位机界面
+│   ├── resource_utilization.png        # PDS 资源截图
+│   ├── hdmi_ddr_ov5640_top.rtr         # 时序报告（需自行放入最终版）
 │   └── THIRD_PARTY.md
 └── README.md
 ```
 
-> **注意：** 实际仓库以已上传文件为准。请勿上传不必要的综合数据库、布局布线缓存及工具日志，也不要混用旧版与新版 DDR3 IP。
+*目录为推荐提交结构；以仓库实际上传内容为准。大体积综合数据库、布局布线缓存和工具运行日志无须提交。*
 
-### 核心 RTL 模块索引
+### 主要 RTL 模块索引
 
-| 模块文件 | 功能 |
-| --- | --- |
-| `hdmi_ddr_ov5640_top.v` | 顶层连接、模式选择及输出协调 |
-| `reg_config.v` | OV5640 寄存器配置 |
-| `fram_buf.v` | 32 行循环缓存及像素访问 |
-| `distortion_dynamic_q16.v` | 四系数定点畸变坐标映射 |
-| `bilinear_interp_rgb565.v` | RGB565 双线性插值 |
-| `thumb_frame_store.v` | 缩略帧数据存储 |
-| `thumb_rotate_map.v`、`thumbnail_rotation.v` | 缩略图旋转坐标及输出支路 |
-| `adaptive_gamma_rgb565.v` | 自适应 Gamma 处理 |
-| `video_cmd_ctrl.v` | UART 指令解析与参数提交 |
-| `video_status_osd.v` | 透明 OSD 和模型参数显示 |
-| `video_reference_overlay.v` | 参考线/边框/网格叠加 |
+| 文件 | 作用 |
+| :--- | :--- |
+| `hdmi_ddr_ov5640_top.v` | 顶层连接、状态与显示通路协调 |
+| `reg_config.v` | OV5640 配置寄存器序列 |
+| `fram_buf.v` | 32 行循环缓存及邻域读取 |
+| `distortion_dynamic_q16.v` | 四系数定点几何映射 |
+| `bilinear_interp_rgb565.v` | RGB565 双线性像素插值 |
+| `thumb_frame_store.v` | 缩略帧存储 |
+| `thumb_rotate_map.v` / `thumbnail_rotation.v` | 缩略旋转相关坐标与显示逻辑 |
+| `adaptive_gamma_rgb565.v` | 自适应 Gamma 增强 |
+| `video_cmd_ctrl.v` | UART 配置解析、参数检查与提交 |
+| `video_status_osd.v` | 透明 OSD 和模型状态显示 |
+| `video_reference_overlay.v` | 参考线叠加（如最终源码采用此文件名） |
 
-## 5. 快速开始：FPGA 工程
+*模块名列示的是工程设计中使用过的文件；确切目录、文件名与连接关系以本仓库提交的最终源码为准。*
 
-1. 安装 **PDS 2025.2**，并按官方授权流程安装与器件匹配的 DDR3 IP。
+<a id="quick-start"></a>
+## 05 · 快速开始
+
+### 5.1 FPGA 工程
+
+1. 安装 **PDS 2025.2** 及适用于目标器件的官方 DDR3 IP。
 2. 打开 `Fpga_Project/HDMI_DDR3_OV5640_test.pds`。
-3. 检查 `source/`、DDR3 IP 的引用路径、顶层模块及 `.fdc` 约束；目录移动后尤其要排查**绝对路径**。
-4. 在 PDS 中依次执行 **Synthesize → Place and Route → Report Timing → Generate Bitstream**。
-5. 检查所有关键时钟的时序约束，随后在硬件条件允许时下载比特流并验证 OV5640、DDR3、HDMI 和 UART。
+3. 核对 `source/` 与 IP 引用路径、顶层模块及 `.fdc` 引脚/时序约束，尤其检查迁移目录后的绝对路径。
+4. 执行 **Synthesize → Place and Route → Report Timing → Generate Bitstream**。
+5. 检查关键时钟时序与未约束路径，具备硬件条件时再下载比特流完成实板测试。
 
-## 6. 快速开始：Python 上位机
+### 5.2 Python 上位机
 
-![PGL50H FPGA 图像处理上位机界面](OV5640_PC_Controller/preview.png)
+![PGL50H FPGA 图像处理上位机界面](docs/gui_preview.png)
 
-进入 `OV5640_PC_Controller/`，在 Windows 中双击 `run_windows.bat`；也可以执行：
+在 Windows 中运行 `OV5640_PC_Controller/run_windows.bat`；或在终端执行：
 
 ```powershell
 cd OV5640_PC_Controller
@@ -125,59 +168,84 @@ python -m pip install -r requirements.txt
 python app.py
 ```
 
-常用单字节 HEX 指令：`01` 切换畸变、`04` 恢复全屏、`05` 切换 Gamma、`06` 参考线开关、`07` 切换参考线模式、`08` 切换 OSD。字段定义、校验范围与示例报文见 [`OV5640_PC_Controller/README.md`](OV5640_PC_Controller/README.md)。
+协议测试（如已包含 `test_protocol.py`）：
 
-**当前协议无板端确认帧**：PC“发送成功”只表示串口写入完成，不能等同于 FPGA 已接受或执行，应结合 HDMI/OSD 画面核验。
+```powershell
+python -m unittest -v test_protocol
+```
 
-## 7. 默认模型参数与精度边界
+上位机支持两类参数包：
 
-当前工程采用的默认 Q16.16 整数系数如下：
+| 报文 | 形式 | 用途 |
+| :--- | :--- | :--- |
+| 12 字节动态配置 | `A5 5A 10 ... XOR 0D` | 旋转角度、X/Y 平移及模式标志 |
+| 24 字节四参数加载 | `A5 5A 12 ... XOR 0D` | K1、K2、P1、P2 Q16.16 有符号整数 |
 
-| 系数 | Q16.16 整数 | 实际数值（近似） |
-| --- | ---: | ---: |
-| K1 | **655** | +0.009995 |
-| K2 | **16** | +0.000244 |
-| P1 | **8** | +0.000122 |
-| P2 | **8** | +0.000122 |
+**常用快捷指令：** `01` 畸变开关 · `04` 恢复全屏 · `05` Gamma 开关 · `06` 参考线开关 · `07` 参考线模式 · `08` OSD 开关。具体字段、校验范围和边界规则见 [`OV5640_PC_Controller/README.md`](OV5640_PC_Controller/README.md)。
 
-该组系数用于**工程模型与动态加载功能演示**。其中 K1 为基于棋盘格图像拟合的工程近似值；K2/P1/P2 保留了极小的非零残差，用于验证底层四参数硬件流水线的功能完整性。OSD 的 `MODEL CORNER SHIFT` 等属于模型预测的几何映射量；显示 `< 0.1 PX` 时也不能将其视为已经验证的实测残余误差。
+> **状态反馈限制：** 上位机显示的“TX 成功”仅表示电脑完成串口写入；当前协议不提供完整的 FPGA 应答帧，实际执行情况需通过 HDMI 画面和 OSD 核验。
 
-## 8. 性能、资源与验证状态
+## 06 · 默认模型系数与精度说明
 
-### PDS 2025.2 时序分析
+当前工程采用以下 **Q16.16 工程配置值**：
 
-官方 DDR3 IP 更新后，PDS 已完成综合、布局布线、时序分析并生成比特流；截图中的实现报告显示 **All Constraints Met**，Setup（Slow）最差裕量约 **+0.764 ns**。
+| 参数 | 32 位有符号整数 | 换算值（约） | 十六进制 |
+| :--- | ---: | ---: | :--- |
+| `K1` | **655** | +0.009995 | `0000028F` |
+| `K2` | **16** | +0.000244 | `00000010` |
+| `P1` | **8** | +0.000122 | `00000008` |
+| `P2` | **8** | +0.000122 | `00000008` |
 
-### 资源利用率
+`K1≈0.01` 是在当前图像获取与测试条件下选定的**工程近似参数**。`K2/P1/P2` 的较小非零值用于演示与验证完整四参数数据通路，**并非经过独立相机标定获得的物理畸变系数**。竞赛中涉及真实标定与精度评估时，应另行提供原始采集数据、标定过程及实测结果。
 
-下图为 PDS 2025.2 的 **Device Map → Resource Usage Summary**：
+OSD 的 `MODEL CORNER SHIFT` 等是**模型预测的几何映射量**；如显示 `THEORETICAL ERROR: < 0.1 PX`，仅表示预设的理想模型演示口径，**不能等同于实测矫正残差小于 0.1 像素**。
 
-![PDS 2025.2 FPGA 资源利用率](docs/resource.png)
+<a id="performance"></a>
+## 07 · 时序性能与资源利用率
+
+### 7.1 时序实现
+
+当前 PDS 2025.2 工具链已完成综合、布局布线与比特流生成。此前提供的 PDS 报告截图显示 **All Constraints Met**，Setup（Slow）最差裕量约 **+0.764 ns**。这一数值对应**该次截图的实现结果**；DDR3 IP 更新后的最终数值以新一轮 `.rtr` 报告为准，不混用不同版本的时序结果。
+
+### 7.2 资源占用
+
+下图为提供的 **PDS 2025.2 / Device Map / Resource Usage Summary** 截图：
+
+![PDS 2025.2 资源利用率](docs/resource_utilization.png)
 
 | FPGA 资源 | 使用量 / 总量 | 利用率 |
-| --- | ---: | ---: |
+| :--- | ---: | ---: |
 | APM（DSP） | 45 / 84 | **54%** |
 | DRM（块 RAM） | 117.5 / 134 | **88%** |
 | LUT | 12,334 / 42,800 | **29%** |
 | FF | 13,723 / 64,200 | **22%** |
 
-DRM 占用相对较高，是本工程为了 1080P 三帧缓存及 32 行流式处理付出的合理物理代价。
+**资源特征：** LUT、FF 与 DSP 仍有一定余量，**DRM 使用率较高**。后续增加片上缓存时应优先评估 BRAM 容量和时序；DDR3 三帧缓存属于**外部存储器**，不能直接把片上 DRM 占用归因于三帧图像本身。
 
-### 功能验证范围
+### 7.3 功能验证边界
 
-- **功能验证：** 已验证 OV5640 → DDR3 → HDMI 图像显示、动态畸变开关、旋转和平移、自适应 Gamma、OSD/参考线及 UART 控制等。
+- **此前实板版本：** 已验证 OV5640 → DDR3 → HDMI 显示、畸变开关、旋转平移、Gamma、OSD/参考线及 UART 参数配置等功能。
+- **PDS 2025.2 迁移版本：** 已完成工具链迁移、DDR3 IP 更新和实现工作；**新位流是否完成上板复验，以后续实测记录为准**。新旧版本的证据应分别注明。
 
-## 9. 已知事项与设计限制
+<a id="limitations"></a>
+## 08 · 已知限制与设计权衡
 
-- **行缓存限制：** 正常畸变矫正依赖 32 行循环缓存，不适合直接承担大角度旋转所需的跨行随机读取 (K1max < 0.05，否则可能会导致缓存击穿)。
-- **旋转分辨率：** 0°～359° 整数角度旋转在缩略帧路径下实现。
-- **输出与采集帧率：** HDMI 1080P@60Hz 与 OV5640 实际采集 FPS 是两项不同指标。
-- **参数来源：** K1 为基于棋盘格图像拟合的工程值；K2/P1/P2 保留了极小的非零残差，用于验证底层四参数硬件流水线的功能完整性，并非高精度测定的物理畸变常数。
-- **精度指标：** 角点模型位移及理想误差文字不等同于现场实测校正精度。
-- **厂商依赖：** DDR3 等 IP 的可再分发范围以授权协议为准；仅上传 `.pds` 文件未必足以复现完整工程。
+- **缓存访问范围：** 32 行循环缓存适用于正常畸变矫正的邻域访问，不足以直接覆盖任意大角度旋转所需的大跨度跨行采样。
+- **旋转支路：** 利用独立 **160 × 90** 缩略帧缓存完成 0°～359°整数角度旋转与二维平移，是面向片上存储约束的架构选择；**不宣称 1080P 全分辨率无损旋转**。
+- **时钟与帧率：** HDMI 1080P@60Hz 不是 OV5640 实测 60fps 采集帧率，也不能单独证明每帧均有新图像。
+- **模型精度：** 当前系数含工程近似与功能演示配置；真实相机标定精度、直线度和端到端延迟仍应通过独立测量给出。
+- **依赖复现：** 受厂商 IP 许可、生成文件和绝对路径影响，仅有 `.pds` 工程文件不一定能在其他环境直接重建。
 
-## 10. 使用与授权说明
+## 09 · 使用与授权说明
 
-本仓库内容用于全国大学生嵌入式芯片与系统设计竞赛评审及相关技术交流。**未经作者书面许可，不得将作者自有代码用于商业用途，也不得擅自复制冒充原创作品。** 本说明不替代适用法律或第三方授权条款。
+本仓库用于**全国大学生嵌入式芯片与系统设计竞赛评审**及相关技术交流。未经作者书面许可，不得将作者自有代码用于商业用途，也不得复制后冒充原创成果。本声明不替代适用法律或正式授权协议。
 
-**当前未在本 README 中声明采用某一开放源代码许可证。** 任何第三方 FPGA IP、加密 RTL、工具文件和库仍受各自权利人许可约束，详见 [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md)。
+**本项目未在此 README 中声明通用开源许可证。** DDR3 等第三方 FPGA IP、加密 RTL 和工具文件遵守各自权利人的许可条件。详见 [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md)。
+
+---
+
+<div align="center">
+
+**PGL50H · FPGA Hardware Image Processing · 2026**
+
+</div>
