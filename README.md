@@ -158,7 +158,7 @@ FPGA_distortion/
 
 ### 5.2 Python 上位机
 
-![PGL50H FPGA 图像处理上位机界面](docs/gui_preview.png)
+![PGL50H FPGA 图像处理上位机界面](docs/preview.png)
 
 在 Windows 中运行 `OV5640_PC_Controller/run_windows.bat`；或在终端执行：
 
@@ -211,7 +211,7 @@ OSD 的 `MODEL CORNER SHIFT` 等是**模型预测的几何映射量**；如显�
 
 下图为提供的 **PDS 2025.2 / Device Map / Resource Usage Summary** 截图：
 
-![PDS 2025.2 资源利用率](docs/resource_utilization.png)
+![PDS 2025.2 资源利用率](docs/resource.png)
 
 | FPGA 资源 | 使用量 / 总量 | 利用率 |
 | :--- | ---: | ---: |
